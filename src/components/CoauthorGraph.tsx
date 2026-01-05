@@ -190,6 +190,7 @@ export default function CoauthorGraphComponent({
 }: CoauthorGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  const isInitializingRef = useRef(false); // Guard against race conditions
   const [hoveredElement, setHoveredElement] = useState<HoveredElement | null>(null);
   const [isMounted, setIsMounted] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
@@ -204,7 +205,9 @@ export default function CoauthorGraphComponent({
   }, []);
 
   const initializeCytoscape = useCallback(() => {
-    if (!isMounted || !containerRef.current || !graph) return;
+    // Guard against race conditions from rapid re-renders
+    if (!isMounted || !containerRef.current || !graph || isInitializingRef.current) return;
+    isInitializingRef.current = true;
 
     if (cyRef.current) {
       try {
@@ -337,6 +340,9 @@ export default function CoauthorGraphComponent({
     cy.one("layoutstop", () => {
       cy.fit(undefined, 60);
     });
+
+    // Release the initialization guard
+    isInitializingRef.current = false;
   }, [graph, onNodeClick, isMounted, router]);
 
   useEffect(() => {
@@ -394,6 +400,8 @@ export default function CoauthorGraphComponent({
             color: colors.panelText,
           }}
           title="Toggle legend"
+          aria-label="Toggle legend"
+          aria-pressed={showLegend}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10"/>
@@ -409,6 +417,7 @@ export default function CoauthorGraphComponent({
             color: colors.panelText,
           }}
           title="Fit to view"
+          aria-label="Fit graph to view"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
@@ -430,6 +439,7 @@ export default function CoauthorGraphComponent({
             color: colors.panelText,
           }}
           title="Re-layout"
+          aria-label="Re-layout graph"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M23 4v6h-6M1 20v-6h6"/>
@@ -538,6 +548,7 @@ export default function CoauthorGraphComponent({
               onClick={() => setSelectedEdge(null)}
               className="ml-2 p-1 rounded-md hover:bg-black/10 dark:hover:bg-white/10 transition-colors shrink-0"
               style={{ color: colors.panelTextMuted }}
+              aria-label="Close papers panel"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M18 6L6 18M6 6l12 12" />

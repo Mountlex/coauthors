@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchAuthorsBasic } from "@/lib/dblp";
-import { checkRateLimit, getClientIP, RATE_LIMITS } from "@/lib/rateLimit";
+import { checkRateLimit, getClientIP, RATE_LIMITS, logRateLimitViolation } from "@/lib/rateLimit";
 import type { SearchResponse, ApiError } from "@/types";
 
 export async function GET(request: NextRequest) {
@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
   const rateLimitResult = checkRateLimit(`search:${clientIP}`, RATE_LIMITS.search);
 
   if (!rateLimitResult.allowed) {
+    logRateLimitViolation(`search:${clientIP}`, rateLimitResult.resetTime);
     return NextResponse.json<ApiError>(
       { error: "Too Many Requests", message: "Rate limit exceeded. Please try again later." },
       {

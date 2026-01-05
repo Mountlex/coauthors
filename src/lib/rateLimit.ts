@@ -5,6 +5,9 @@ type RateLimitEntry = {
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
+// IPv4 and IPv6 pattern for validation
+const IP_PATTERN = /^(?:(?:\d{1,3}\.){3}\d{1,3}|[a-fA-F0-9:]+)$/;
+
 // Clean up expired entries periodically
 const CLEANUP_INTERVAL = 60 * 1000; // 1 minute
 setInterval(() => {
@@ -72,18 +75,31 @@ export function checkRateLimit(
 }
 
 /**
- * Get client IP from request headers
+ * Log rate limit violation for monitoring
+ */
+export function logRateLimitViolation(identifier: string, resetTime: number): void {
+  console.warn(
+    `[RateLimit] Exceeded: ${identifier}, resets at ${new Date(resetTime).toISOString()}`
+  );
+}
+
+/**
+ * Get client IP from request headers with validation
  */
 export function getClientIP(request: Request): string {
   // Check common proxy headers
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (forwardedFor) {
     // Take the first IP in the chain (original client)
-    return forwardedFor.split(",")[0].trim();
+    const firstIP = forwardedFor.split(",")[0].trim();
+    // Validate IP format to prevent header spoofing
+    if (IP_PATTERN.test(firstIP)) {
+      return firstIP;
+    }
   }
 
   const realIP = request.headers.get("x-real-ip");
-  if (realIP) {
+  if (realIP && IP_PATTERN.test(realIP)) {
     return realIP;
   }
 

@@ -9,10 +9,26 @@ import type {
 
 const DBLP_API_BASE = "https://dblp.org";
 
-// LRU cache with size limit
+// LRU cache with size limit and thread-safe operations
 const MAX_CACHE_SIZE = 500;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const cache = new Map<string, { data: unknown; timestamp: number; accessedAt: number }>();
+
+// Simple lock for cache operations to prevent race conditions
+let cacheOperationInProgress = false;
+
+async function withCacheLock<T>(operation: () => T): Promise<T> {
+  // Wait if another operation is in progress
+  while (cacheOperationInProgress) {
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  cacheOperationInProgress = true;
+  try {
+    return operation();
+  } finally {
+    cacheOperationInProgress = false;
+  }
+}
 
 function evictLRU(): void {
   if (cache.size < MAX_CACHE_SIZE) return;
@@ -37,12 +53,19 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchWithCache<T>(url: string, retries = 3): Promise<T> {
   const now = Date.now();
-  const cached = cache.get(url);
 
-  if (cached && now - cached.timestamp < CACHE_TTL) {
-    // Update access time for LRU
-    cached.accessedAt = now;
-    return cached.data as T;
+  // Thread-safe cache read
+  const cached = await withCacheLock(() => {
+    const entry = cache.get(url);
+    if (entry && now - entry.timestamp < CACHE_TTL) {
+      entry.accessedAt = now;
+      return entry.data as T;
+    }
+    return null;
+  });
+
+  if (cached !== null) {
+    return cached;
   }
 
   for (let attempt = 0; attempt < retries; attempt++) {
@@ -72,9 +95,11 @@ async function fetchWithCache<T>(url: string, retries = 3): Promise<T> {
 
       const data = await response.json();
 
-      // Evict LRU entry if cache is full before adding new entry
-      evictLRU();
-      cache.set(url, { data, timestamp: now, accessedAt: now });
+      // Thread-safe cache write
+      await withCacheLock(() => {
+        evictLRU();
+        cache.set(url, { data, timestamp: now, accessedAt: now });
+      });
 
       return data as T;
     } catch (error) {
@@ -138,10 +163,20 @@ export async function fetchAuthorPaperCount(authorName: string): Promise<number>
 export async function searchAuthors(query: string): Promise<Author[]> {
   const authors = await searchAuthorsBasic(query);
 
-  // Fetch paper counts sequentially to avoid rate limiting
-  for (const author of authors) {
-    author.paperCount = await getAuthorPaperCount(author.name);
-    await sleep(RATE_LIMIT_DELAY);
+  // Fetch paper counts in parallel batches to balance speed and rate limiting
+  const BATCH_SIZE = 5;
+  for (let i = 0; i < authors.length; i += BATCH_SIZE) {
+    const batch = authors.slice(i, i + BATCH_SIZE);
+    const counts = await Promise.all(
+      batch.map(a => getAuthorPaperCount(a.name))
+    );
+    batch.forEach((author, idx) => {
+      author.paperCount = counts[idx];
+    });
+    // Small delay between batches to avoid rate limiting
+    if (i + BATCH_SIZE < authors.length) {
+      await sleep(RATE_LIMIT_DELAY * 2);
+    }
   }
 
   // Sort by paper count (highest first)
@@ -259,8 +294,8 @@ export function extractCoauthors(
     for (const author of authors) {
       const authorPid = author["@pid"] || slugify(author.text);
 
-      // Skip the center author
-      if (authorPid === centerPid || author.text.includes(centerPid)) {
+      // Skip the center author (compare PIDs directly, not string contains)
+      if (authorPid === centerPid) {
         continue;
       }
 

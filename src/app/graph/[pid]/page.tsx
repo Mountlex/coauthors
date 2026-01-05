@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import type { CoauthorGraph } from "@/types";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 // Dynamic import to avoid SSR issues with Cytoscape
 const CoauthorGraphComponent = dynamic(
@@ -124,6 +125,11 @@ export default function GraphPage() {
               <p className="text-sm text-gray-500 dark:text-slate-400">
                 {coauthorCount} coauthors &middot; {graph.stats.totalPapers} papers &middot; avg {graph.stats.avgAuthorsPerPaper.toFixed(1)} authors/paper
               </p>
+              {coauthorCount > 200 && (
+                <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                  Large network - performance may be affected
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -142,7 +148,9 @@ export default function GraphPage() {
 
       {/* Graph */}
       <div className="flex-1">
-        <CoauthorGraphComponent graph={graph} />
+        <ErrorBoundary>
+          <CoauthorGraphComponent graph={graph} />
+        </ErrorBoundary>
       </div>
     </div>
   );

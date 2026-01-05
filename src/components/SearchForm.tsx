@@ -80,7 +80,7 @@ export default function SearchForm() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => results.length > 0 && setShowResults(true)}
-          placeholder="Search for a researcher (e.g., 'Geoffrey Hinton')"
+          placeholder="Search for a researcher (e.g., 'Richard Karp')"
           className="w-full px-4 py-3 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
         {isLoading && (

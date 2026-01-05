@@ -143,6 +143,8 @@ function buildCoauthorToCoauthorEdges(
 ): Array<{ source: string; target: string; weight: number; papers: Paper[] }> {
   // Map to track edges between coauthor pairs: "pid1|pid2" -> papers[]
   const pairEdges = new Map<string, Paper[]>();
+  // Set to track seen paper titles per pair for O(1) dedup
+  const pairSeenTitles = new Map<string, Set<string>>();
 
   for (const pub of publications) {
     if (!pub.info.authors) continue;
@@ -155,7 +157,8 @@ function buildCoauthorToCoauthorEdges(
     const coauthorPids: string[] = [];
     for (const author of authors) {
       const authorPid = author["@pid"] || slugify(author.text);
-      if (authorPid !== centerPid && !author.text.includes(centerPid)) {
+      // Compare PIDs directly, not string contains
+      if (authorPid !== centerPid) {
         // Only include if this coauthor is in our map (connected to center)
         if (coauthorsMap.has(authorPid)) {
           coauthorPids.push(authorPid);
@@ -178,14 +181,21 @@ function buildCoauthorToCoauthorEdges(
         const [pid1, pid2] = [coauthorPids[i], coauthorPids[j]].sort();
         const key = `${pid1}|${pid2}`;
 
-        const existing = pairEdges.get(key);
-        if (existing) {
-          // Avoid duplicate papers
-          if (!existing.some(p => p.title === paper.title)) {
+        // O(1) dedup using Set
+        let seenTitles = pairSeenTitles.get(key);
+        if (!seenTitles) {
+          seenTitles = new Set();
+          pairSeenTitles.set(key, seenTitles);
+        }
+
+        if (!seenTitles.has(paper.title)) {
+          seenTitles.add(paper.title);
+          const existing = pairEdges.get(key);
+          if (existing) {
             existing.push(paper);
+          } else {
+            pairEdges.set(key, [paper]);
           }
-        } else {
-          pairEdges.set(key, [paper]);
         }
       }
     }

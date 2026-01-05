@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildCoauthorGraph } from "@/lib/graph";
-import { checkRateLimit, getClientIP, RATE_LIMITS } from "@/lib/rateLimit";
+import { checkRateLimit, getClientIP, RATE_LIMITS, logRateLimitViolation } from "@/lib/rateLimit";
 import type { GraphResponse, ApiError } from "@/types";
 
 // DBLP PIDs are like "123/4567" or "a/AuthorName" or "h/JohnDoe-1"
@@ -15,6 +15,7 @@ export async function GET(
   const rateLimitResult = checkRateLimit(`graph:${clientIP}`, RATE_LIMITS.graph);
 
   if (!rateLimitResult.allowed) {
+    logRateLimitViolation(`graph:${clientIP}`, rateLimitResult.resetTime);
     return NextResponse.json<ApiError>(
       { error: "Too Many Requests", message: "Rate limit exceeded. Please try again later." },
       {
