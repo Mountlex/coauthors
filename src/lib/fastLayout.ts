@@ -32,13 +32,13 @@ interface LayoutResult {
 const FA2_SETTINGS = {
   barnesHutOptimize: true,
   barnesHutTheta: 0.5,
-  gravity: 8,
-  scalingRatio: 2,
-  strongGravityMode: true,
+  gravity: 1,              // Lower gravity lets clusters separate more
+  scalingRatio: 6,         // Higher repulsion helps separate clusters and prevent overlap
+  strongGravityMode: false, // Disable to let peripheral clusters form
   slowDown: 2,
   adjustSizes: true,
-  edgeWeightInfluence: 2,
-  linLogMode: true,
+  edgeWeightInfluence: 2,  // Moderate edge weight influence for clusters
+  linLogMode: true,        // Logarithmic mode helps reveal community structure
   outboundAttractionDistribution: true,
 };
 
@@ -135,39 +135,60 @@ function scalePositions(
 }
 
 /**
- * Push apart overlapping nodes
+ * Push apart overlapping nodes on final positions
  */
-function resolveOverlaps(graph: Graph, minDistance: number = 20, iterations: number = 30): void {
+function resolveOverlaps(
+  positions: LayoutResult,
+  nodes: NodeData[],
+  centerNodeId: string,
+  minDistance: number = 50,
+  iterations: number = 150
+): void {
+  // Build a map of node sizes
+  const nodeSizes = new Map<string, number>();
+  for (const node of nodes) {
+    nodeSizes.set(node.data.id, 10 + Math.sqrt(node.data.paperCount || 1) * 5);
+  }
+
+  const nodeIds = Object.keys(positions);
+
   for (let iter = 0; iter < iterations; iter++) {
     let moved = false;
-    const nodeIds = graph.nodes();
 
     for (let i = 0; i < nodeIds.length; i++) {
-      const nodeA = nodeIds[i];
-      const attrsA = graph.getNodeAttributes(nodeA);
-      if (attrsA.fixed) continue;
+      const idA = nodeIds[i];
+      if (idA === centerNodeId) continue; // Don't move center node
+
+      const posA = positions[idA];
+      const sizeA = nodeSizes.get(idA) || 10;
 
       for (let j = i + 1; j < nodeIds.length; j++) {
-        const nodeB = nodeIds[j];
-        const attrsB = graph.getNodeAttributes(nodeB);
+        const idB = nodeIds[j];
+        const posB = positions[idB];
+        const sizeB = nodeSizes.get(idB) || 10;
 
-        const dx = attrsB.x - attrsA.x;
-        const dy = attrsB.y - attrsA.y;
+        const dx = posB.x - posA.x;
+        const dy = posB.y - posA.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const minDist = minDistance + (attrsA.size + attrsB.size) / 4;
+        // minDist is sum of radii plus small gap
+        const minDist = (sizeA + sizeB) / 2 + minDistance;
 
         if (dist < minDist && dist > 0) {
           const overlap = minDist - dist;
           const pushX = (dx / dist) * overlap * 0.5;
           const pushY = (dy / dist) * overlap * 0.5;
 
-          if (!attrsA.fixed) {
-            graph.setNodeAttribute(nodeA, "x", attrsA.x - pushX);
-            graph.setNodeAttribute(nodeA, "y", attrsA.y - pushY);
-          }
-          if (!attrsB.fixed) {
-            graph.setNodeAttribute(nodeB, "x", attrsB.x + pushX);
-            graph.setNodeAttribute(nodeB, "y", attrsB.y + pushY);
+          const bIsCenter = idB === centerNodeId;
+
+          if (!bIsCenter) {
+            posA.x -= pushX;
+            posA.y -= pushY;
+            posB.x += pushX;
+            posB.y += pushY;
+          } else {
+            // B is center, only move A
+            posA.x -= pushX * 2;
+            posA.y -= pushY * 2;
           }
           moved = true;
         }
@@ -179,7 +200,36 @@ function resolveOverlaps(graph: Graph, minDistance: number = 20, iterations: num
 }
 
 /**
- * Compute layout positions instantly (no animation)
+ * Calculate total movement of nodes between iterations
+ */
+function calculateTotalMovement(graph: Graph, previousPositions: Map<string, { x: number; y: number }>): number {
+  let totalMovement = 0;
+
+  graph.forEachNode((nodeId, attrs) => {
+    const prev = previousPositions.get(nodeId);
+    if (prev) {
+      const dx = attrs.x - prev.x;
+      const dy = attrs.y - prev.y;
+      totalMovement += Math.sqrt(dx * dx + dy * dy);
+    }
+  });
+
+  return totalMovement;
+}
+
+/**
+ * Store current positions for comparison
+ */
+function snapshotPositions(graph: Graph): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>();
+  graph.forEachNode((nodeId, attrs) => {
+    positions.set(nodeId, { x: attrs.x, y: attrs.y });
+  });
+  return positions;
+}
+
+/**
+ * Compute layout positions with convergence detection
  */
 export function computeFastLayout(
   nodes: NodeData[],
@@ -189,20 +239,36 @@ export function computeFastLayout(
   centerNodeId: string
 ): LayoutResult {
   const graph = createGraph(nodes, edges, containerWidth, containerHeight, centerNodeId);
-  const iterations = Math.max(300, Math.min(600, nodes.length));
 
-  forceAtlas2.assign(graph, {
-    iterations,
-    settings: FA2_SETTINGS,
-  });
+  const batchSize = 100;
+  const maxIterations = 3000;
+  const convergenceThreshold = 0.5 * nodes.length; // Average movement < 0.5px per node
 
-  // Post-process to resolve any remaining overlaps
-  resolveOverlaps(graph);
+  let totalIterations = 0;
 
-  return scalePositions(graph, containerWidth, containerHeight, centerNodeId);
+  while (totalIterations < maxIterations) {
+    const previousPositions = snapshotPositions(graph);
+
+    forceAtlas2.assign(graph, {
+      iterations: batchSize,
+      settings: FA2_SETTINGS,
+    });
+
+    totalIterations += batchSize;
+
+    const movement = calculateTotalMovement(graph, previousPositions);
+
+    // Check for convergence
+    if (movement < convergenceThreshold) {
+      break;
+    }
+  }
+
+  // Scale positions to fit container
+  const positions = scalePositions(graph, containerWidth, containerHeight, centerNodeId);
+
+  // Gentle overlap resolution - just prevent visual overlap, preserve cluster structure
+  resolveOverlaps(positions, nodes, centerNodeId, 5, 50);
+
+  return positions;
 }
-
-/**
- * Threshold for using fast layout vs fcose
- */
-export const FAST_LAYOUT_THRESHOLD = 150;

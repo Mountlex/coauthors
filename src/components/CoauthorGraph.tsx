@@ -3,19 +3,14 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import cytoscape, { Core, NodeSingular } from "cytoscape";
-// @ts-expect-error - no types available for cytoscape-fcose
-import fcose from "cytoscape-fcose";
 import type { CoauthorGraph, Paper, PublicationType } from "@/types";
 import { PUBLICATION_TYPE_LABELS } from "@/types";
 import { useTheme } from "./ThemeProvider";
 import { graphColors, type GraphColorScheme } from "@/lib/colors";
 import { filterPublicationsByType, rebuildGraphFromPublications } from "@/lib/graph";
-import { computeFastLayout, FAST_LAYOUT_THRESHOLD } from "@/lib/fastLayout";
+import { computeFastLayout } from "@/lib/fastLayout";
 
 const ALL_PUBLICATION_TYPES: PublicationType[] = ["journal", "conference", "book", "preprint"];
-
-// Register fcose layout extension
-cytoscape.use(fcose);
 
 // Create style configuration based on theme colors
 const createStyles = (colors: GraphColorScheme) => [
@@ -106,42 +101,6 @@ const createStyles = (colors: GraphColorScheme) => [
   },
 ];
 
-// Create layout configuration for fcose with center node fixed
-const createFcoseLayoutConfig = (centerNodeId: string, containerWidth: number, containerHeight: number, nodeCount: number) => ({
-  name: "fcose",
-  quality: "default",
-  animate: true,
-  animationDuration: 600,
-  animationEasing: "ease-out",
-  // Overlap prevention
-  nodeSeparation: 120,
-  nodeDimensionsIncludeLabels: true,
-  uniformNodeDimensions: false,
-  packComponents: true,
-  // Fixed center node
-  fixedNodeConstraint: [
-    { nodeId: centerNodeId, position: { x: containerWidth / 2, y: containerHeight / 2 } }
-  ],
-  // Edge lengths - longer to give more space
-  idealEdgeLength: (edge: any) => {
-    const weight = edge.data("weight") || 1;
-    return Math.max(80, 160 - weight * 6);
-  },
-  // Node repulsion - higher values push nodes apart more
-  nodeRepulsion: (node: any) => {
-    const degree = node.degree();
-    return 6000 / Math.sqrt(degree + 1);
-  },
-  gravity: 0.4,
-  gravityRange: 2.0,
-  // More iterations for better layout
-  numIter: Math.min(3000, Math.max(1000, nodeCount * 8)),
-  randomize: true,
-  tile: false,
-  // Padding around nodes
-  padding: 30,
-});
-
 interface CoauthorGraphProps {
   graph: CoauthorGraph;
   onNodeClick?: (nodeId: string, nodeLabel: string) => void;
@@ -204,38 +163,29 @@ export default function CoauthorGraphComponent({
     const containerHeight = containerRef.current.clientHeight;
     const centerNode = graph.nodes.find(n => n.data.isCenter);
     const centerNodeId = centerNode?.data.id || "";
-    const isLargeGraph = graph.nodes.length > FAST_LAYOUT_THRESHOLD;
 
-    let layoutConfig: any;
-    let elementsWithPositions = [...graph.nodes, ...graph.edges];
+    // Use ForceAtlas2 layout
+    const positions = computeFastLayout(
+      graph.nodes,
+      graph.edges,
+      containerWidth,
+      containerHeight,
+      centerNodeId
+    );
 
-    if (isLargeGraph) {
-      // Use fast layout (Barnes-Hut ForceAtlas2)
-      const positions = computeFastLayout(
-        graph.nodes,
-        graph.edges,
-        containerWidth,
-        containerHeight,
-        centerNodeId
-      );
-
-      elementsWithPositions = [
-        ...graph.nodes.map(node => ({
-          ...node,
-          position: positions[node.data.id] || { x: containerWidth / 2, y: containerHeight / 2 }
-        })),
-        ...graph.edges
-      ];
-      layoutConfig = { name: "preset" };
-    } else {
-      layoutConfig = createFcoseLayoutConfig(centerNodeId, containerWidth, containerHeight, graph.nodes.length);
-    }
+    const elementsWithPositions = [
+      ...graph.nodes.map(node => ({
+        ...node,
+        position: positions[node.data.id] || { x: containerWidth / 2, y: containerHeight / 2 }
+      })),
+      ...graph.edges
+    ];
 
     const cy = cytoscape({
       container: containerRef.current,
       elements: elementsWithPositions,
       style: createStyles(colors) as any,
-      layout: layoutConfig,
+      layout: { name: "preset" },
       minZoom: 0.2,
       maxZoom: 3,
       wheelSensitivity: 0.3,
@@ -445,20 +395,13 @@ export default function CoauthorGraphComponent({
     // Run layout to reposition nodes
     const containerWidth = containerRef.current?.clientWidth || 800;
     const containerHeight = containerRef.current?.clientHeight || 600;
-    const isLargeGraph = nodes.length > FAST_LAYOUT_THRESHOLD;
 
-    if (isLargeGraph) {
-      const positions = computeFastLayout(nodes, edges, containerWidth, containerHeight, centerPid);
-      cy.nodes().forEach(node => {
-        const pos = positions[node.id()];
-        if (pos) node.position(pos);
-      });
-      cy.fit(undefined, 60);
-    } else {
-      cy.layout(
-        createFcoseLayoutConfig(centerPid, containerWidth, containerHeight, nodes.length) as any
-      ).run();
-    }
+    const positions = computeFastLayout(nodes, edges, containerWidth, containerHeight, centerPid);
+    cy.nodes().forEach(node => {
+      const pos = positions[node.id()];
+      if (pos) node.position(pos);
+    });
+    cy.fit(undefined, 60);
   }, [enabledTypes, graph.publications, graph.centerAuthor, isMounted]);
 
   useEffect(() => {
@@ -553,18 +496,13 @@ export default function CoauthorGraphComponent({
             const height = containerRef.current.clientHeight;
             const centerNode = graph.nodes.find(n => n.data.isCenter);
             const centerNodeId = centerNode?.data.id || "";
-            const isLargeGraph = graph.nodes.length > FAST_LAYOUT_THRESHOLD;
 
-            if (isLargeGraph) {
-              const positions = computeFastLayout(graph.nodes, graph.edges, width, height, centerNodeId);
-              cy.nodes().forEach(node => {
-                const pos = positions[node.id()];
-                if (pos) node.position(pos);
-              });
-              cy.fit(undefined, 60);
-            } else {
-              cy.layout(createFcoseLayoutConfig(centerNodeId, width, height, graph.nodes.length) as any).run();
-            }
+            const positions = computeFastLayout(graph.nodes, graph.edges, width, height, centerNodeId);
+            cy.nodes().forEach(node => {
+              const pos = positions[node.id()];
+              if (pos) node.position(pos);
+            });
+            cy.fit(undefined, 60);
           }}
           className="w-9 h-9 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
           style={{
