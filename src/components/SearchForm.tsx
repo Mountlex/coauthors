@@ -133,6 +133,7 @@ export default function SearchForm() {
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-controls="search-results"
+          aria-activedescendant={selectedIndex >= 0 ? `search-option-${selectedIndex}` : undefined}
         />
         {isLoading && (
           <div className="absolute right-4 top-1/2 -translate-y-1/2">
@@ -146,19 +147,21 @@ export default function SearchForm() {
       )}
 
       {showResults && results.length > 0 && (
-        <div
+        <ul
           id="search-results"
           role="listbox"
-          className="absolute z-10 w-full mt-3 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl shadow-xl max-h-80 overflow-y-auto animate-fade-in-scale"
+          aria-label="Search results"
+          className="absolute z-10 w-full mt-3 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl shadow-xl max-h-80 overflow-y-auto animate-fade-in-scale list-none m-0 p-0"
         >
           {results.map((author, index) => (
-            <button
+            <li
               key={author.pid}
+              id={`search-option-${index}`}
               role="option"
               aria-selected={index === selectedIndex}
               onClick={() => handleSelectAuthor(author)}
               onMouseEnter={() => setSelectedIndex(index)}
-              className={`w-full px-5 py-4 text-left first:rounded-t-2xl last:rounded-b-2xl transition-colors ${
+              className={`px-5 py-4 cursor-pointer first:rounded-t-2xl last:rounded-b-2xl transition-colors ${
                 index === selectedIndex
                   ? "bg-amber-50 dark:bg-amber-500/10"
                   : "hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
@@ -176,9 +179,9 @@ export default function SearchForm() {
                   {author.aliases.length > 2 && "..."}
                 </div>
               )}
-            </button>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
 
       {showResults && results.length === 0 && query.length >= 2 && !isLoading && (

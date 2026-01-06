@@ -54,7 +54,15 @@ export async function GET(
 
   try {
     const graph = await buildCoauthorGraph(decodedPid, authorName);
-    return NextResponse.json<GraphResponse>({ graph });
+    return NextResponse.json<GraphResponse>(
+      { graph },
+      {
+        headers: {
+          // Cache for 5 minutes, allow stale-while-revalidate for 1 hour
+          "Cache-Control": "public, max-age=300, stale-while-revalidate=3600",
+        },
+      }
+    );
   } catch (error) {
     console.error("Graph building error:", error);
 

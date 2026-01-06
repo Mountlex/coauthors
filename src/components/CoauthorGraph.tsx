@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import cytoscape, { Core, NodeSingular } from "cytoscape";
 import type { CoauthorGraph, Paper, PublicationType } from "@/types";
@@ -9,8 +9,38 @@ import { useTheme } from "./ThemeProvider";
 import { graphColors, type GraphColorScheme } from "@/lib/colors";
 import { filterPublicationsByType, rebuildGraphFromPublications } from "@/lib/graph";
 import { computeFastLayout } from "@/lib/fastLayout";
+import { computeLayoutAsync, terminateLayoutWorker } from "@/lib/layoutWorker";
 
 const ALL_PUBLICATION_TYPES: PublicationType[] = ["journal", "conference", "book", "preprint"];
+
+// Cache layout positions to avoid recomputation on filter toggles
+const layoutCache = new Map<string, Record<string, { x: number; y: number }>>();
+const MAX_CACHE_SIZE = 20;
+
+function getFilterKey(enabledTypes: Set<PublicationType>, centerPid: string): string {
+  const typeStr = ALL_PUBLICATION_TYPES.filter(t => enabledTypes.has(t)).sort().join(",");
+  return `${centerPid}:${typeStr}`;
+}
+
+function cacheLayout(key: string, positions: Record<string, { x: number; y: number }>): void {
+  // LRU eviction
+  if (layoutCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = layoutCache.keys().next().value;
+    if (firstKey) layoutCache.delete(firstKey);
+  }
+  layoutCache.set(key, positions);
+}
+
+function getCachedLayout(key: string): Record<string, { x: number; y: number }> | null {
+  const cached = layoutCache.get(key);
+  if (cached) {
+    // Move to end (most recently used)
+    layoutCache.delete(key);
+    layoutCache.set(key, cached);
+    return cached;
+  }
+  return null;
+}
 
 // Create style configuration based on theme colors
 const createStyles = (colors: GraphColorScheme) => [
@@ -134,6 +164,7 @@ export default function CoauthorGraphComponent({
   const isFirstFilterRender = useRef(true); // Skip filter effect on initial mount
   const [hoveredElement, setHoveredElement] = useState<HoveredElement | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+  const [isComputingLayout, setIsComputingLayout] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdge | null>(null);
   const { resolvedTheme } = useTheme();
@@ -142,10 +173,15 @@ export default function CoauthorGraphComponent({
 
   useEffect(() => {
     setIsMounted(true);
-    return () => setIsMounted(false);
+    // Reset filter render flag on mount (fixes race condition on remount)
+    isFirstFilterRender.current = true;
+    return () => {
+      setIsMounted(false);
+      terminateLayoutWorker();
+    };
   }, []);
 
-  const initializeCytoscape = useCallback(() => {
+  const initializeCytoscape = useCallback(async () => {
     // Guard against race conditions from rapid re-renders
     if (!isMounted || !containerRef.current || !graph || isInitializingRef.current) return;
     isInitializingRef.current = true;
@@ -164,14 +200,42 @@ export default function CoauthorGraphComponent({
     const centerNode = graph.nodes.find(n => n.data.isCenter);
     const centerNodeId = centerNode?.data.id || "";
 
-    // Use ForceAtlas2 layout
-    const positions = computeFastLayout(
-      graph.nodes,
-      graph.edges,
-      containerWidth,
-      containerHeight,
-      centerNodeId
-    );
+    // Check cache first, then compute if needed
+    const cacheKey = getFilterKey(enabledTypes, centerNodeId);
+    let positions = getCachedLayout(cacheKey);
+    if (!positions) {
+      // Use async layout for large graphs to avoid blocking UI
+      const isLargeGraph = graph.nodes.length > 150;
+      if (isLargeGraph) {
+        setIsComputingLayout(true);
+        try {
+          positions = await computeLayoutAsync(
+            graph.nodes,
+            graph.edges,
+            containerWidth,
+            containerHeight,
+            centerNodeId
+          );
+        } finally {
+          setIsComputingLayout(false);
+        }
+      } else {
+        positions = computeFastLayout(
+          graph.nodes,
+          graph.edges,
+          containerWidth,
+          containerHeight,
+          centerNodeId
+        );
+      }
+      cacheLayout(cacheKey, positions);
+    }
+
+    // Guard against unmount during async operation
+    if (!isMounted || !containerRef.current) {
+      isInitializingRef.current = false;
+      return;
+    }
 
     const elementsWithPositions = [
       ...graph.nodes.map(node => ({
@@ -181,6 +245,9 @@ export default function CoauthorGraphComponent({
       ...graph.edges
     ];
 
+    // Enable WebGL for large graphs (GPU-accelerated rendering)
+    const useWebGL = graph.nodes.length > 100;
+
     const cy = cytoscape({
       container: containerRef.current,
       elements: elementsWithPositions,
@@ -189,7 +256,9 @@ export default function CoauthorGraphComponent({
       minZoom: 0.2,
       maxZoom: 3,
       wheelSensitivity: 0.3,
-    });
+      // WebGL renderer for GPU acceleration (types not yet updated in @types/cytoscape)
+      ...(useWebGL && { renderer: { name: 'canvas', webgl: true } }),
+    } as any);
 
     // Node click - navigate
     cy.on("tap", "node", (event) => {
@@ -392,13 +461,20 @@ export default function CoauthorGraphComponent({
       }
     });
 
-    // Run layout to reposition nodes
+    // Check cache for layout positions
     const containerWidth = containerRef.current?.clientWidth || 800;
     const containerHeight = containerRef.current?.clientHeight || 600;
+    const cacheKey = getFilterKey(enabledTypes, centerPid);
 
-    const positions = computeFastLayout(nodes, edges, containerWidth, containerHeight, centerPid);
+    let positions = getCachedLayout(cacheKey);
+    if (!positions) {
+      // Compute and cache layout
+      positions = computeFastLayout(nodes, edges, containerWidth, containerHeight, centerPid);
+      cacheLayout(cacheKey, positions);
+    }
+
     cy.nodes().forEach(node => {
-      const pos = positions[node.id()];
+      const pos = positions![node.id()];
       if (pos) node.position(pos);
     });
     cy.fit(undefined, 60);
@@ -416,13 +492,47 @@ export default function CoauthorGraphComponent({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  const graphLabel = graph.centerAuthor
+    ? `Coauthor network graph for ${graph.centerAuthor.name} with ${graph.nodes.length - 1} collaborators`
+    : "Coauthor network graph";
+
   return (
     <div className="relative w-full h-full">
       <div
         ref={containerRef}
         className="w-full h-full"
         style={{ backgroundColor: colors.background }}
+        role="application"
+        aria-label={graphLabel}
+        aria-describedby="graph-instructions"
       />
+      <div id="graph-instructions" className="sr-only">
+        Interactive graph visualization. Use mouse to pan and zoom. Click on nodes to navigate to that author. Click on edges to see shared papers.
+      </div>
+
+      {/* Loading indicator for async layout computation */}
+      {isComputingLayout && (
+        <div
+          className="absolute inset-0 flex items-center justify-center backdrop-blur-sm"
+          style={{ backgroundColor: `${colors.background}80` }}
+        >
+          <div className="flex flex-col items-center gap-3">
+            <div
+              className="w-8 h-8 border-2 rounded-full animate-spin"
+              style={{
+                borderColor: colors.panelBorder,
+                borderTopColor: colors.centerNode,
+              }}
+            />
+            <span
+              className="text-sm font-medium"
+              style={{ color: colors.panelText }}
+            >
+              Computing layout...
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="absolute top-4 right-4 flex items-center gap-1.5">
@@ -433,7 +543,7 @@ export default function CoauthorGraphComponent({
             <button
               key={type}
               onClick={() => onToggleType(type)}
-              className="px-3 h-8 flex items-center justify-center rounded-xl backdrop-blur-md transition-all text-xs font-medium hover:scale-[1.02] active:scale-[0.98]"
+              className="px-3 h-11 min-w-[44px] flex items-center justify-center rounded-xl backdrop-blur-md transition-all text-xs font-medium hover:scale-[1.02] active:scale-[0.98]"
               style={{
                 backgroundColor: isEnabled ? colors.centerNode : colors.panelBg,
                 border: `1px solid ${isEnabled ? "transparent" : colors.panelBorder}`,
@@ -457,7 +567,7 @@ export default function CoauthorGraphComponent({
 
         <button
           onClick={() => setShowLegend(!showLegend)}
-          className="w-9 h-9 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
+          className="w-11 h-11 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
           style={{
             backgroundColor: showLegend ? colors.centerNode : colors.panelBg,
             border: `1px solid ${showLegend ? "transparent" : colors.panelBorder}`,
@@ -468,14 +578,14 @@ export default function CoauthorGraphComponent({
           aria-label="Toggle legend"
           aria-pressed={showLegend}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <circle cx="12" cy="12" r="10"/>
             <path d="M12 16v-4M12 8h.01"/>
           </svg>
         </button>
         <button
           onClick={() => cyRef.current?.fit(undefined, 60)}
-          className="w-9 h-9 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
+          className="w-11 h-11 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
           style={{
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
@@ -484,7 +594,7 @@ export default function CoauthorGraphComponent({
           title="Fit to view"
           aria-label="Fit graph to view"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
           </svg>
         </button>
@@ -504,7 +614,7 @@ export default function CoauthorGraphComponent({
             });
             cy.fit(undefined, 60);
           }}
-          className="w-9 h-9 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
+          className="w-11 h-11 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
           style={{
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
@@ -513,7 +623,7 @@ export default function CoauthorGraphComponent({
           title="Re-layout"
           aria-label="Re-layout graph"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M23 4v6h-6M1 20v-6h6"/>
             <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
@@ -523,7 +633,7 @@ export default function CoauthorGraphComponent({
       {/* Collapsible Legend */}
       {showLegend && (
         <div
-          className="absolute top-16 right-4 p-4 rounded-2xl backdrop-blur-md text-sm animate-fade-in-scale"
+          className="absolute top-[72px] right-4 p-4 rounded-2xl backdrop-blur-md text-sm animate-fade-in-scale"
           style={{
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
@@ -629,7 +739,7 @@ export default function CoauthorGraphComponent({
               style={{ color: colors.panelTextMuted }}
               aria-label="Close papers panel"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             </button>

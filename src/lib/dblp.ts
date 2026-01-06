@@ -19,14 +19,26 @@ let cachePromise: Promise<void> = Promise.resolve();
 
 async function withCacheLock<T>(operation: () => T): Promise<T> {
   // Chain operations sequentially to ensure FIFO ordering
-  let result: T;
-  const currentPromise = cachePromise.then(() => {
-    result = operation();
+  return new Promise<T>((resolve, reject) => {
+    cachePromise = cachePromise
+      .then(() => {
+        try {
+          const result = operation();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      })
+      .catch(() => {
+        // Keep chain alive even if previous operation failed
+        try {
+          const result = operation();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
   });
-  // Update chain, ignoring errors to not block subsequent operations
-  cachePromise = currentPromise.catch(() => {});
-  await currentPromise;
-  return result!;
 }
 
 function evictLRU(): void {

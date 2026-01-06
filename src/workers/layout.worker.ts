@@ -1,6 +1,6 @@
 /**
- * Fast graph layout using graphology's ForceAtlas2 with Barnes-Hut optimization
- * Much faster than fcose for large graphs (O(n log n) vs O(n²))
+ * Web Worker for graph layout computation
+ * Runs ForceAtlas2 layout off the main thread to prevent UI freezing
  */
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
@@ -28,7 +28,16 @@ interface LayoutResult {
   [nodeId: string]: { x: number; y: number };
 }
 
-// ForceAtlas2 base settings for coauthor networks
+interface WorkerMessage {
+  type: 'compute';
+  nodes: NodeData[];
+  edges: EdgeData[];
+  containerWidth: number;
+  containerHeight: number;
+  centerNodeId: string;
+}
+
+// ForceAtlas2 base settings
 const FA2_BASE_SETTINGS = {
   barnesHutOptimize: true,
   barnesHutTheta: 0.5,
@@ -42,45 +51,17 @@ const FA2_BASE_SETTINGS = {
   outboundAttractionDistribution: true,
 };
 
-/**
- * Get adaptive ForceAtlas2 settings based on graph size
- * Larger graphs need coarser approximations for speed
- */
 function getAdaptiveFA2Settings(nodeCount: number) {
-  if (nodeCount <= 200) {
-    return FA2_BASE_SETTINGS;
-  }
-
+  if (nodeCount <= 200) return FA2_BASE_SETTINGS;
   if (nodeCount <= 500) {
-    return {
-      ...FA2_BASE_SETTINGS,
-      barnesHutTheta: 0.6,  // Slightly coarser approximation
-      slowDown: 3,
-    };
+    return { ...FA2_BASE_SETTINGS, barnesHutTheta: 0.6, slowDown: 3 };
   }
-
   if (nodeCount <= 1000) {
-    return {
-      ...FA2_BASE_SETTINGS,
-      barnesHutTheta: 0.8,  // Coarser approximation for speed
-      slowDown: 4,
-      scalingRatio: 8,      // More repulsion to spread out faster
-    };
+    return { ...FA2_BASE_SETTINGS, barnesHutTheta: 0.8, slowDown: 4, scalingRatio: 8 };
   }
-
-  // Very large graphs (1000+)
-  return {
-    ...FA2_BASE_SETTINGS,
-    barnesHutTheta: 1.0,    // Maximum approximation
-    slowDown: 5,
-    scalingRatio: 10,
-    gravity: 0.3,           // Less gravity, let it spread naturally
-  };
+  return { ...FA2_BASE_SETTINGS, barnesHutTheta: 1.0, slowDown: 5, scalingRatio: 10, gravity: 0.3 };
 }
 
-/**
- * Create a graphology graph from nodes and edges
- */
 function createGraph(
   nodes: NodeData[],
   edges: EdgeData[],
@@ -93,7 +74,6 @@ function createGraph(
   const centerY = containerHeight / 2;
   const spread = Math.min(containerWidth, containerHeight) * 0.4;
 
-  // Seeded random for reproducibility
   const seededRandom = (seed: number) => {
     const x = Math.sin(seed) * 10000;
     return x - Math.floor(x);
@@ -109,7 +89,6 @@ function createGraph(
     graph.addNode(node.data.id, {
       x,
       y,
-      // Size is used by adjustSizes to prevent overlap
       size: 10 + Math.sqrt(node.data.paperCount || 1) * 5,
       fixed: isCenter,
     });
@@ -125,9 +104,6 @@ function createGraph(
   return graph;
 }
 
-/**
- * Scale positions to fit container
- */
 function scalePositions(
   graph: Graph,
   containerWidth: number,
@@ -170,10 +146,7 @@ function scalePositions(
   return positions;
 }
 
-/**
- * Simple spatial hash grid for efficient neighbor lookups
- * O(1) average case for finding nearby nodes instead of O(N)
- */
+// Spatial grid for overlap resolution
 class SpatialGrid {
   private cellSize: number;
   private grid: Map<string, string[]> = new Map();
@@ -186,9 +159,7 @@ class SpatialGrid {
   }
 
   private getCellKey(x: number, y: number): string {
-    const cx = Math.floor(x / this.cellSize);
-    const cy = Math.floor(y / this.cellSize);
-    return `${cx},${cy}`;
+    return `${Math.floor(x / this.cellSize)},${Math.floor(y / this.cellSize)}`;
   }
 
   rebuild(): void {
@@ -197,11 +168,8 @@ class SpatialGrid {
       const pos = this.positions[nodeId];
       const key = this.getCellKey(pos.x, pos.y);
       const cell = this.grid.get(key);
-      if (cell) {
-        cell.push(nodeId);
-      } else {
-        this.grid.set(key, [nodeId]);
-      }
+      if (cell) cell.push(nodeId);
+      else this.grid.set(key, [nodeId]);
     }
   }
 
@@ -214,13 +182,10 @@ class SpatialGrid {
 
     for (let dx = -cellRadius; dx <= cellRadius; dx++) {
       for (let dy = -cellRadius; dy <= cellRadius; dy++) {
-        const key = `${cx + dx},${cy + dy}`;
-        const cell = this.grid.get(key);
+        const cell = this.grid.get(`${cx + dx},${cy + dy}`);
         if (cell) {
           for (const id of cell) {
-            if (id !== nodeId) {
-              nearby.push(id);
-            }
+            if (id !== nodeId) nearby.push(id);
           }
         }
       }
@@ -229,10 +194,6 @@ class SpatialGrid {
   }
 }
 
-/**
- * Push apart overlapping nodes on final positions
- * Uses spatial hashing for O(N) average case instead of O(N²)
- */
 function resolveOverlaps(
   positions: LayoutResult,
   nodes: NodeData[],
@@ -241,13 +202,10 @@ function resolveOverlaps(
   maxIterations: number = 150
 ): void {
   const nodeCount = nodes.length;
-
-  // Scale iterations based on graph size - small graphs need fewer iterations
   const iterations = nodeCount > 500
     ? Math.min(maxIterations, Math.max(20, Math.floor(100 / Math.log10(nodeCount))))
     : maxIterations;
 
-  // Build a map of node sizes
   const nodeSizes = new Map<string, number>();
   let maxSize = 0;
   for (const node of nodes) {
@@ -258,8 +216,6 @@ function resolveOverlaps(
 
   const nodeIds = Object.keys(positions);
   const searchRadius = maxSize + minDistance;
-
-  // Use spatial grid for large graphs, brute force for small ones
   const useSpatialGrid = nodeCount > 200;
   const grid = useSpatialGrid ? new SpatialGrid(positions, searchRadius) : null;
 
@@ -271,8 +227,6 @@ function resolveOverlaps(
 
       const posA = positions[idA];
       const sizeA = nodeSizes.get(idA) || 10;
-
-      // Get candidate nodes to check
       const candidates = useSpatialGrid
         ? grid!.getNearbyNodes(idA, searchRadius)
         : nodeIds.filter(id => id !== idA);
@@ -285,17 +239,14 @@ function resolveOverlaps(
         const dy = posB.y - posA.y;
         const distSq = dx * dx + dy * dy;
         const minDist = (sizeA + sizeB) / 2 + minDistance;
-        const minDistSq = minDist * minDist;
 
-        if (distSq < minDistSq && distSq > 0) {
+        if (distSq < minDist * minDist && distSq > 0) {
           const dist = Math.sqrt(distSq);
           const overlap = minDist - dist;
           const pushX = (dx / dist) * overlap * 0.5;
           const pushY = (dy / dist) * overlap * 0.5;
 
-          const bIsCenter = idB === centerNodeId;
-
-          if (!bIsCenter) {
+          if (idB !== centerNodeId) {
             posA.x -= pushX;
             posA.y -= pushY;
             posB.x += pushX;
@@ -309,49 +260,12 @@ function resolveOverlaps(
       }
     }
 
-    // Rebuild spatial grid every few iterations if positions changed significantly
-    if (useSpatialGrid && moved && iter % 5 === 4) {
-      grid!.rebuild();
-    }
-
+    if (useSpatialGrid && moved && iter % 5 === 4) grid!.rebuild();
     if (!moved) break;
   }
 }
 
-/**
- * Calculate total movement of nodes between iterations
- */
-function calculateTotalMovement(graph: Graph, previousPositions: Map<string, { x: number; y: number }>): number {
-  let totalMovement = 0;
-
-  graph.forEachNode((nodeId, attrs) => {
-    const prev = previousPositions.get(nodeId);
-    if (prev) {
-      const dx = attrs.x - prev.x;
-      const dy = attrs.y - prev.y;
-      totalMovement += Math.sqrt(dx * dx + dy * dy);
-    }
-  });
-
-  return totalMovement;
-}
-
-/**
- * Store current positions for comparison
- */
-function snapshotPositions(graph: Graph): Map<string, { x: number; y: number }> {
-  const positions = new Map<string, { x: number; y: number }>();
-  graph.forEachNode((nodeId, attrs) => {
-    positions.set(nodeId, { x: attrs.x, y: attrs.y });
-  });
-  return positions;
-}
-
-/**
- * Compute layout positions with convergence detection
- * Adapts parameters based on graph size for optimal performance
- */
-export function computeFastLayout(
+function computeLayout(
   nodes: NodeData[],
   edges: EdgeData[],
   containerWidth: number,
@@ -360,23 +274,19 @@ export function computeFastLayout(
 ): LayoutResult {
   const nodeCount = nodes.length;
   const graph = createGraph(nodes, edges, containerWidth, containerHeight, centerNodeId);
-
-  // Adaptive parameters based on graph size
   const fa2Settings = getAdaptiveFA2Settings(nodeCount);
 
-  // Larger graphs converge faster with coarser approximations
   const batchSize = nodeCount > 500 ? 150 : 100;
   const maxIterations = nodeCount > 1000 ? 1500 : nodeCount > 500 ? 2000 : 3000;
-
-  // More lenient convergence for large graphs (they don't need pixel-perfect positioning)
-  const convergenceThreshold = nodeCount > 500
-    ? 1.0 * nodeCount  // 1px average movement
-    : 0.5 * nodeCount; // 0.5px average movement
+  const convergenceThreshold = nodeCount > 500 ? 1.0 * nodeCount : 0.5 * nodeCount;
 
   let totalIterations = 0;
 
   while (totalIterations < maxIterations) {
-    const previousPositions = snapshotPositions(graph);
+    const previousPositions = new Map<string, { x: number; y: number }>();
+    graph.forEachNode((nodeId, attrs) => {
+      previousPositions.set(nodeId, { x: attrs.x, y: attrs.y });
+    });
 
     forceAtlas2.assign(graph, {
       iterations: batchSize,
@@ -385,21 +295,36 @@ export function computeFastLayout(
 
     totalIterations += batchSize;
 
-    const movement = calculateTotalMovement(graph, previousPositions);
+    let totalMovement = 0;
+    graph.forEachNode((nodeId, attrs) => {
+      const prev = previousPositions.get(nodeId);
+      if (prev) {
+        const dx = attrs.x - prev.x;
+        const dy = attrs.y - prev.y;
+        totalMovement += Math.sqrt(dx * dx + dy * dy);
+      }
+    });
 
-    // Check for convergence
-    if (movement < convergenceThreshold) {
-      break;
-    }
+    if (totalMovement < convergenceThreshold) break;
   }
 
-  // Scale positions to fit container
   const positions = scalePositions(graph, containerWidth, containerHeight, centerNodeId);
-
-  // Gentle overlap resolution - just prevent visual overlap, preserve cluster structure
-  // Use smaller minDistance for large graphs to prevent excessive spreading
   const minDistance = nodeCount > 500 ? 10 : 15;
   resolveOverlaps(positions, nodes, centerNodeId, minDistance, 50);
 
   return positions;
 }
+
+// Worker message handler
+self.onmessage = (event: MessageEvent<WorkerMessage>) => {
+  const { type, nodes, edges, containerWidth, containerHeight, centerNodeId } = event.data;
+
+  if (type === 'compute') {
+    try {
+      const positions = computeLayout(nodes, edges, containerWidth, containerHeight, centerNodeId);
+      self.postMessage({ type: 'result', positions });
+    } catch (error) {
+      self.postMessage({ type: 'error', error: String(error) });
+    }
+  }
+};
