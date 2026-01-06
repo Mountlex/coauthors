@@ -13,6 +13,7 @@ import {
   getAuthorPublications,
   extractCoauthors,
   slugify,
+  normalizeAuthors,
 } from "./dblp";
 
 /**
@@ -125,10 +126,7 @@ function calculatePaperStats(publications: DBLPPublicationHit[]): PaperStats {
     if (!pub.info.authors) {
       authorCounts.push(1); // Solo paper
     } else {
-      const authors = Array.isArray(pub.info.authors.author)
-        ? pub.info.authors.author
-        : [pub.info.authors.author];
-      authorCounts.push(authors.length);
+      authorCounts.push(normalizeAuthors(pub.info.authors.author).length);
     }
   }
 
@@ -161,9 +159,7 @@ function buildCoauthorToCoauthorEdges(
   for (const pub of publications) {
     if (!pub.info.authors) continue;
 
-    const authors = Array.isArray(pub.info.authors.author)
-      ? pub.info.authors.author
-      : [pub.info.authors.author];
+    const authors = normalizeAuthors(pub.info.authors.author);
 
     // Get coauthor PIDs for this paper (excluding center author)
     const coauthorPids: string[] = [];
@@ -239,34 +235,6 @@ function getInitials(name: string): string {
     .join('')
     .toUpperCase()
     .slice(0, 3);
-}
-
-/**
- * Get statistics about the graph
- */
-export function getGraphStats(graph: CoauthorGraph) {
-  const totalCoauthors = graph.nodes.length - 1; // Exclude center
-  const totalEdges = graph.edges.length;
-  const totalPapers = graph.edges.reduce((sum, e) => sum + e.data.weight, 0);
-
-  // Find most frequent coauthors
-  const topCoauthors = [...graph.edges]
-    .sort((a, b) => b.data.weight - a.data.weight)
-    .slice(0, 5)
-    .map((e) => {
-      const coauthorNode = graph.nodes.find((n) => n.data.id === e.data.target);
-      return {
-        name: coauthorNode?.data.label || "Unknown",
-        papers: e.data.weight,
-      };
-    });
-
-  return {
-    totalCoauthors,
-    totalEdges,
-    totalPapers,
-    topCoauthors,
-  };
 }
 
 /**

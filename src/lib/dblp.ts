@@ -9,6 +9,15 @@ import type {
 
 const DBLP_API_BASE = "https://dblp.org";
 
+/**
+ * Normalize DBLP author array (handles single author vs array)
+ */
+export function normalizeAuthors(
+  authors: DBLPPublicationAuthor | DBLPPublicationAuthor[]
+): DBLPPublicationAuthor[] {
+  return Array.isArray(authors) ? authors : [authors];
+}
+
 // LRU cache with size limit and thread-safe operations
 const MAX_CACHE_SIZE = 500;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -160,43 +169,6 @@ export async function searchAuthorsBasic(query: string): Promise<Author[]> {
 }
 
 /**
- * Fetch paper count for a single author (exported for streaming)
- */
-export async function fetchAuthorPaperCount(authorName: string): Promise<number> {
-  const count = await getAuthorPaperCount(authorName);
-  await sleep(RATE_LIMIT_DELAY);
-  return count;
-}
-
-/**
- * Search for authors by name (with paper counts - non-streaming)
- */
-export async function searchAuthors(query: string): Promise<Author[]> {
-  const authors = await searchAuthorsBasic(query);
-
-  // Fetch paper counts in parallel batches to balance speed and rate limiting
-  const BATCH_SIZE = 5;
-  for (let i = 0; i < authors.length; i += BATCH_SIZE) {
-    const batch = authors.slice(i, i + BATCH_SIZE);
-    const counts = await Promise.all(
-      batch.map(a => getAuthorPaperCount(a.name))
-    );
-    batch.forEach((author, idx) => {
-      author.paperCount = counts[idx];
-    });
-    // Small delay between batches to avoid rate limiting
-    if (i + BATCH_SIZE < authors.length) {
-      await sleep(RATE_LIMIT_DELAY * 2);
-    }
-  }
-
-  // Sort by paper count (highest first)
-  authors.sort((a, b) => (b.paperCount || 0) - (a.paperCount || 0));
-
-  return authors;
-}
-
-/**
  * Extract affiliation from DBLP notes
  */
 function extractAffiliation(notes?: { note: { "@type": string; text: string }[] | { "@type": string; text: string } }): string | undefined {
@@ -319,9 +291,7 @@ export function extractCoauthors(
   for (const pub of publications) {
     if (!pub.info.authors) continue;
 
-    const authors = Array.isArray(pub.info.authors.author)
-      ? pub.info.authors.author
-      : [pub.info.authors.author];
+    const authors = normalizeAuthors(pub.info.authors.author);
 
     const paper: Paper = {
       title: pub.info.title,

@@ -47,17 +47,11 @@ export default function Home() {
       <main className="animate-fade-in flex flex-col items-center w-full max-w-xl">
         <NetworkIcon />
 
-        <h1
-          className="text-4xl sm:text-5xl font-semibold tracking-tight mb-3 text-center"
-          style={{ color: "var(--text-primary)" }}
-        >
+        <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight mb-3 text-center text-neutral-900 dark:text-white">
           Coauthor Graph
         </h1>
 
-        <p
-          className="text-center text-lg mb-10 max-w-md leading-relaxed"
-          style={{ color: "var(--text-secondary)" }}
-        >
+        <p className="text-center text-lg mb-10 max-w-md leading-relaxed text-neutral-600 dark:text-neutral-400">
           Explore research collaboration networks. Search for any computer science researcher.
         </p>
 

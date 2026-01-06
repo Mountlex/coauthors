@@ -59,7 +59,6 @@ export default function GraphPage() {
 
     return {
       coauthorCount: nodes.length - 1, // Exclude center
-      totalPapers: stats.totalPapers,
       avgAuthorsPerPaper: stats.avgAuthorsPerPaper,
     };
   }, [graph, enabledTypes]);
@@ -246,9 +245,7 @@ export default function GraphPage() {
   }
 
   const coauthorCount = filteredStats?.coauthorCount ?? graph.nodes.length - 1;
-  const totalPapers = filteredStats?.totalPapers ?? graph.stats.totalPapers;
   const avgAuthors = filteredStats?.avgAuthorsPerPaper ?? graph.stats.avgAuthorsPerPaper;
-  const isFiltered = enabledTypes.size < 4;
 
   return (
     <div className="h-screen flex flex-col">
@@ -278,9 +275,6 @@ export default function GraphPage() {
               <div className="flex items-center gap-2 mt-2">
                 <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 text-xs font-medium text-neutral-600 dark:text-neutral-300">
                   {coauthorCount} coauthors
-                </span>
-                <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 text-xs font-medium text-neutral-600 dark:text-neutral-300">
-                  {totalPapers} papers{isFiltered && <span className="text-amber-600 dark:text-amber-500 ml-1">*</span>}
                 </span>
                 <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 text-xs font-medium text-neutral-600 dark:text-neutral-300">
                   ~{avgAuthors.toFixed(1)} authors/paper

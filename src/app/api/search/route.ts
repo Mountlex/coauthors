@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchAuthorsBasic } from "@/lib/dblp";
 import { checkRateLimit, getClientIP, RATE_LIMITS, logRateLimitViolation } from "@/lib/rateLimit";
+import { rateLimitResponse, serverErrorResponse } from "@/lib/apiHelpers";
 import type { SearchResponse, ApiError } from "@/types";
 
 export async function GET(request: NextRequest) {
@@ -10,16 +11,7 @@ export async function GET(request: NextRequest) {
 
   if (!rateLimitResult.allowed) {
     logRateLimitViolation(`search:${clientIP}`, rateLimitResult.resetTime);
-    return NextResponse.json<ApiError>(
-      { error: "Too Many Requests", message: "Rate limit exceeded. Please try again later." },
-      {
-        status: 429,
-        headers: {
-          "Retry-After": String(Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000)),
-          "X-RateLimit-Remaining": "0",
-        },
-      }
-    );
+    return rateLimitResponse(rateLimitResult);
   }
 
   const searchParams = request.nextUrl.searchParams;
@@ -37,17 +29,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json<SearchResponse>({ authors });
   } catch (error) {
     console.error("Search error:", error);
-
-    // Sanitize error message in production
-    const isDev = process.env.NODE_ENV === "development";
-    const message =
-      isDev && error instanceof Error
-        ? error.message
-        : "Failed to search authors. Please try again.";
-
-    return NextResponse.json<ApiError>(
-      { error: "Internal Server Error", message },
-      { status: 500 }
-    );
+    return serverErrorResponse(error, "Failed to search authors. Please try again.");
   }
 }
