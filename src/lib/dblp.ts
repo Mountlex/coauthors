@@ -211,6 +211,35 @@ async function getAuthorPaperCount(authorName: string): Promise<number> {
 }
 
 /**
+ * Fetch all publications for an author with pagination
+ * Handles authors with >1000 publications
+ */
+async function fetchAllPublications(authorNameForSearch: string): Promise<DBLPPublicationHit[]> {
+  const PAGE_SIZE = 1000;
+  const allHits: DBLPPublicationHit[] = [];
+
+  // Get total count first
+  const countUrl = `${DBLP_API_BASE}/search/publ/api?q=author:${encodeURIComponent(authorNameForSearch)}:&format=json&h=0`;
+  const countResult = await fetchWithCache<DBLPPublicationsResponse>(countUrl);
+  const total = parseInt(countResult.result.hits["@total"], 10) || 0;
+
+  // Fetch in pages
+  for (let offset = 0; offset < total; offset += PAGE_SIZE) {
+    const url = `${DBLP_API_BASE}/search/publ/api?q=author:${encodeURIComponent(authorNameForSearch)}:&format=json&h=${PAGE_SIZE}&f=${offset}`;
+    const result = await fetchWithCache<DBLPPublicationsResponse>(url);
+    if (result.result.hits.hit) {
+      allHits.push(...result.result.hits.hit);
+    }
+    // Rate limit between pages
+    if (offset + PAGE_SIZE < total) {
+      await sleep(RATE_LIMIT_DELAY);
+    }
+  }
+
+  return allHits;
+}
+
+/**
  * Get all publications for an author by their name and PID
  */
 export async function getAuthorPublications(
@@ -257,13 +286,12 @@ export async function getAuthorPublications(
   // Convert name to DBLP search format (replace spaces with underscores)
   const authorNameForSearch = name.replace(/ /g, "_");
 
-  // Get publications using the publication search API with author name
-  const pubUrl = `${DBLP_API_BASE}/search/publ/api?q=author:${encodeURIComponent(authorNameForSearch)}:&format=json&h=1000`;
-  const pubResult = await fetchWithCache<DBLPPublicationsResponse>(pubUrl);
+  // Get all publications with pagination support
+  const publications = await fetchAllPublications(authorNameForSearch);
 
   return {
     author,
-    publications: pubResult.result.hits.hit || [],
+    publications,
   };
 }
 
@@ -288,6 +316,7 @@ export function extractCoauthors(
       year: pub.info.year,
       venue: pub.info.venue,
       url: pub.info.url,
+      type: pub.info.type,
     };
 
     for (const author of authors) {
@@ -331,7 +360,7 @@ function extractPidFromUrl(url: string): string {
 /**
  * Create a slug from author name (fallback when PID is not available)
  */
-function slugify(name: string): string {
+export function slugify(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

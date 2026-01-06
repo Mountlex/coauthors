@@ -6,11 +6,23 @@ import type {
   Paper,
   PaperStats,
   DBLPPublicationHit,
+  PublicationType,
 } from "@/types";
+import { DBLP_TYPE_MAP } from "@/types";
 import {
   getAuthorPublications,
   extractCoauthors,
+  slugify,
 } from "./dblp";
+
+/**
+ * Create a stable edge ID from source and target PIDs
+ * Sorts PIDs to ensure consistent IDs regardless of direction
+ */
+function createEdgeId(source: string, target: string): string {
+  const [a, b] = [source, target].sort();
+  return `edge-${a}-${b}`;
+}
 
 /**
  * Build a coauthor graph for a given author PID
@@ -55,13 +67,12 @@ export async function buildCoauthorGraph(
 
   // Build edges array
   const edges: GraphEdge[] = [];
-  let edgeId = 0;
 
   // Add edges from center to coauthors
   for (const [coauthorPid, { papers }] of coauthorsMap) {
     edges.push({
       data: {
-        id: `e${edgeId++}`,
+        id: createEdgeId(pid, coauthorPid),
         source: pid,
         target: coauthorPid,
         weight: papers.length,
@@ -76,7 +87,7 @@ export async function buildCoauthorGraph(
   for (const edge of coauthorEdges) {
     edges.push({
       data: {
-        id: `e${edgeId++}`,
+        id: createEdgeId(edge.source, edge.target),
         ...edge,
         isCoauthorEdge: true,
       },
@@ -91,6 +102,7 @@ export async function buildCoauthorGraph(
     nodes,
     edges,
     stats,
+    publications,
   };
 }
 
@@ -217,16 +229,6 @@ function buildCoauthorToCoauthorEdges(
 }
 
 /**
- * Create a slug from author name (fallback when PID is not available)
- */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-/**
  * Generate initials from author name (max 3 characters)
  */
 function getInitials(name: string): string {
@@ -265,4 +267,101 @@ export function getGraphStats(graph: CoauthorGraph) {
     totalPapers,
     topCoauthors,
   };
+}
+
+/**
+ * Filter publications by enabled publication types
+ */
+export function filterPublicationsByType(
+  publications: DBLPPublicationHit[],
+  enabledTypes: Set<PublicationType>
+): DBLPPublicationHit[] {
+  if (enabledTypes.size === 4) {
+    // All types enabled, no filtering needed
+    return publications;
+  }
+
+  return publications.filter((pub) => {
+    const dblpType = pub.info.type;
+    if (!dblpType) {
+      // Unknown type - include if preprint is enabled (fallback)
+      return enabledTypes.has("preprint");
+    }
+    const mappedType = DBLP_TYPE_MAP[dblpType];
+    return mappedType ? enabledTypes.has(mappedType) : enabledTypes.has("preprint");
+  });
+}
+
+/**
+ * Rebuild graph nodes and edges from filtered publications
+ * Used for client-side filtering without re-fetching data
+ */
+export function rebuildGraphFromPublications(
+  centerPid: string,
+  centerAuthor: Author,
+  publications: DBLPPublicationHit[]
+): { nodes: GraphNode[]; edges: GraphEdge[]; stats: PaperStats } {
+  // Extract coauthors from filtered publications
+  const coauthorsMap = extractCoauthors(centerPid, publications);
+
+  // Build nodes array
+  const nodes: GraphNode[] = [];
+
+  // Add center author as first node
+  nodes.push({
+    data: {
+      id: centerPid,
+      label: centerAuthor.name,
+      initials: getInitials(centerAuthor.name),
+      paperCount: publications.length,
+      isCenter: true,
+    },
+  });
+
+  // Add coauthor nodes
+  for (const [coauthorPid, { author: coauthor, papers }] of coauthorsMap) {
+    nodes.push({
+      data: {
+        id: coauthorPid,
+        label: coauthor.name,
+        initials: getInitials(coauthor.name),
+        paperCount: papers.length,
+        isCenter: false,
+      },
+    });
+  }
+
+  // Build edges array
+  const edges: GraphEdge[] = [];
+
+  // Add edges from center to coauthors
+  for (const [coauthorPid, { papers }] of coauthorsMap) {
+    edges.push({
+      data: {
+        id: createEdgeId(centerPid, coauthorPid),
+        source: centerPid,
+        target: coauthorPid,
+        weight: papers.length,
+        papers,
+        isCoauthorEdge: false,
+      },
+    });
+  }
+
+  // Add edges between coauthors who appear on the same paper
+  const coauthorEdges = buildCoauthorToCoauthorEdges(centerPid, publications, coauthorsMap);
+  for (const edge of coauthorEdges) {
+    edges.push({
+      data: {
+        id: createEdgeId(edge.source, edge.target),
+        ...edge,
+        isCoauthorEdge: true,
+      },
+    });
+  }
+
+  // Calculate paper statistics
+  const stats = calculatePaperStats(publications);
+
+  return { nodes, edges, stats };
 }

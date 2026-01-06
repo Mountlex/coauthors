@@ -68,7 +68,26 @@ export interface Paper {
   year?: string;
   venue?: string;
   url?: string;
+  type?: string;
 }
+
+// DBLP publication type categories
+export type PublicationType = "journal" | "conference" | "book" | "preprint";
+
+// Mapping from DBLP type strings to our categories
+export const DBLP_TYPE_MAP: Record<string, PublicationType> = {
+  "Journal Articles": "journal",
+  "Conference and Workshop Papers": "conference",
+  "Books and Theses": "book",
+  "Informal and Other Publications": "preprint",
+};
+
+export const PUBLICATION_TYPE_LABELS: Record<PublicationType, string> = {
+  journal: "Journal",
+  conference: "Conference",
+  book: "Books",
+  preprint: "Preprint",
+};
 
 export interface PaperStats {
   totalPapers: number;
@@ -82,6 +101,7 @@ export interface CoauthorGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   stats: PaperStats;
+  publications: DBLPPublicationHit[];
 }
 
 export interface GraphNode {

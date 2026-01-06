@@ -5,52 +5,20 @@ import { useRouter } from "next/navigation";
 import cytoscape, { Core, NodeSingular } from "cytoscape";
 // @ts-expect-error - no types available for cytoscape-fcose
 import fcose from "cytoscape-fcose";
-import type { CoauthorGraph, Paper } from "@/types";
+import type { CoauthorGraph, Paper, PublicationType } from "@/types";
+import { PUBLICATION_TYPE_LABELS } from "@/types";
 import { useTheme } from "./ThemeProvider";
+import { graphColors, type GraphColorScheme } from "@/lib/colors";
+import { filterPublicationsByType, rebuildGraphFromPublications } from "@/lib/graph";
+import { computeFastLayout, FAST_LAYOUT_THRESHOLD } from "@/lib/fastLayout";
+
+const ALL_PUBLICATION_TYPES: PublicationType[] = ["journal", "conference", "book", "preprint"];
 
 // Register fcose layout extension
 cytoscape.use(fcose);
 
-// Minimalist color scheme
-const themeColors = {
-  dark: {
-    graphBg: "#0a0a0a",
-    nodeColor: "#e5e5e5",
-    nodeText: "#0a0a0a",
-    centerNode: "#6366f1",
-    centerText: "#ffffff",
-    edgeColor: "#525252",
-    edgeCoauthor: "#6b7280",
-    highlightColor: "#a5b4fc",
-    highlightEdge: "#818cf8",
-    textOutline: "#0a0a0a",
-    dimmedOpacity: 0.15,
-    panelBg: "rgba(23, 23, 23, 0.9)",
-    panelBorder: "rgba(64, 64, 64, 0.5)",
-    panelText: "#fafafa",
-    panelTextMuted: "#a3a3a3",
-  },
-  light: {
-    graphBg: "#fafafa",
-    nodeColor: "#262626",
-    nodeText: "#fafafa",
-    centerNode: "#6366f1",
-    centerText: "#ffffff",
-    edgeColor: "#6b7280",
-    edgeCoauthor: "#9ca3af",
-    highlightColor: "#6366f1",
-    highlightEdge: "#818cf8",
-    textOutline: "#fafafa",
-    dimmedOpacity: 0.2,
-    panelBg: "rgba(255, 255, 255, 0.9)",
-    panelBorder: "rgba(212, 212, 212, 0.5)",
-    panelText: "#171717",
-    panelTextMuted: "#737373",
-  },
-};
-
 // Create style configuration based on theme colors
-const createStyles = (colors: typeof themeColors.dark | typeof themeColors.light) => [
+const createStyles = (colors: GraphColorScheme) => [
   // Base node style - minimalist
   {
     selector: "node",
@@ -58,30 +26,30 @@ const createStyles = (colors: typeof themeColors.dark | typeof themeColors.light
       label: "data(initials)",
       "text-valign": "center" as const,
       "text-halign": "center" as const,
-      "font-size": 9,
+      "font-size": 10,
       "font-weight": 500,
       "font-family": "system-ui, -apple-system, sans-serif",
       color: colors.nodeText,
-      "background-color": colors.nodeColor,
-      width: "mapData(paperCount, 1, 50, 20, 48)",
-      height: "mapData(paperCount, 1, 50, 20, 48)",
+      "background-color": colors.node,
+      width: "mapData(paperCount, 1, 50, 24, 56)",
+      height: "mapData(paperCount, 1, 50, 24, 56)",
       "border-width": 0,
       "overlay-opacity": 0,
       "transition-property": "opacity, background-color, width, height",
       "transition-duration": 200,
     },
   },
-  // Center node - accent color
+  // Center node - accent color (orange)
   {
     selector: "node[?isCenter]",
     style: {
       label: "data(initials)",
       "background-color": colors.centerNode,
       color: colors.centerText,
-      "font-size": 12,
+      "font-size": 14,
       "font-weight": 600,
-      width: 56,
-      height: 56,
+      width: 64,
+      height: 64,
     },
   },
   // Dimmed state
@@ -95,18 +63,18 @@ const createStyles = (colors: typeof themeColors.dark | typeof themeColors.light
   {
     selector: "node.highlighted",
     style: {
-      "background-color": colors.highlightColor,
+      "background-color": colors.highlight,
       color: colors.nodeText,
     },
   },
-  // Base edge style - thin and subtle
+  // Base edge style - more visible
   {
     selector: "edge",
     style: {
-      width: "mapData(weight, 1, 20, 1, 3)",
-      "line-color": colors.edgeColor,
+      width: "mapData(weight, 1, 20, 2, 6)",
+      "line-color": colors.edge,
       "curve-style": "bezier" as const,
-      opacity: 0.6,
+      opacity: 0.85,
       "transition-property": "opacity, line-color, width",
       "transition-duration": 200,
     },
@@ -116,15 +84,15 @@ const createStyles = (colors: typeof themeColors.dark | typeof themeColors.light
     selector: "edge[?isCoauthorEdge]",
     style: {
       "line-color": colors.edgeCoauthor,
-      width: "mapData(weight, 1, 20, 1, 2.5)",
-      opacity: 0.5,
+      width: "mapData(weight, 1, 20, 1.5, 4)",
+      opacity: 0.7,
     },
   },
   // Dimmed edge
   {
     selector: "edge.dimmed",
     style: {
-      opacity: 0.05,
+      opacity: 0.08,
     },
   },
   // Highlighted edge
@@ -133,41 +101,52 @@ const createStyles = (colors: typeof themeColors.dark | typeof themeColors.light
     style: {
       opacity: 1,
       "line-color": colors.highlightEdge,
-      width: "mapData(weight, 1, 20, 2, 5)",
+      width: "mapData(weight, 1, 20, 3, 8)",
     },
   },
 ];
 
 // Create layout configuration for fcose with center node fixed
-const createFcoseLayoutConfig = (centerNodeId: string, containerWidth: number, containerHeight: number) => ({
+const createFcoseLayoutConfig = (centerNodeId: string, containerWidth: number, containerHeight: number, nodeCount: number) => ({
   name: "fcose",
   quality: "default",
   animate: true,
   animationDuration: 600,
   animationEasing: "ease-out",
-  nodeSeparation: 150,
+  // Overlap prevention
+  nodeSeparation: 120,
   nodeDimensionsIncludeLabels: true,
+  uniformNodeDimensions: false,
+  packComponents: true,
+  // Fixed center node
   fixedNodeConstraint: [
     { nodeId: centerNodeId, position: { x: containerWidth / 2, y: containerHeight / 2 } }
   ],
+  // Edge lengths - longer to give more space
   idealEdgeLength: (edge: any) => {
     const weight = edge.data("weight") || 1;
-    return Math.max(80, 200 - weight * 10);
+    return Math.max(80, 160 - weight * 6);
   },
+  // Node repulsion - higher values push nodes apart more
   nodeRepulsion: (node: any) => {
     const degree = node.degree();
-    return 5000 / Math.sqrt(degree + 1);
+    return 6000 / Math.sqrt(degree + 1);
   },
   gravity: 0.4,
   gravityRange: 2.0,
-  numIter: 2500,
+  // More iterations for better layout
+  numIter: Math.min(3000, Math.max(1000, nodeCount * 8)),
   randomize: true,
   tile: false,
+  // Padding around nodes
+  padding: 30,
 });
 
 interface CoauthorGraphProps {
   graph: CoauthorGraph;
   onNodeClick?: (nodeId: string, nodeLabel: string) => void;
+  enabledTypes: Set<PublicationType>;
+  onToggleType: (type: PublicationType) => void;
 }
 
 interface HoveredElement {
@@ -187,16 +166,19 @@ interface SelectedEdge {
 export default function CoauthorGraphComponent({
   graph,
   onNodeClick,
+  enabledTypes,
+  onToggleType,
 }: CoauthorGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const isInitializingRef = useRef(false); // Guard against race conditions
+  const isFirstFilterRender = useRef(true); // Skip filter effect on initial mount
   const [hoveredElement, setHoveredElement] = useState<HoveredElement | null>(null);
   const [isMounted, setIsMounted] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdge | null>(null);
   const { resolvedTheme } = useTheme();
-  const colors = themeColors[resolvedTheme];
+  const colors = graphColors[resolvedTheme === "dark" ? "dark" : "light"];
   const router = useRouter();
 
   useEffect(() => {
@@ -222,12 +204,38 @@ export default function CoauthorGraphComponent({
     const containerHeight = containerRef.current.clientHeight;
     const centerNode = graph.nodes.find(n => n.data.isCenter);
     const centerNodeId = centerNode?.data.id || "";
+    const isLargeGraph = graph.nodes.length > FAST_LAYOUT_THRESHOLD;
+
+    let layoutConfig: any;
+    let elementsWithPositions = [...graph.nodes, ...graph.edges];
+
+    if (isLargeGraph) {
+      // Use fast layout (Barnes-Hut ForceAtlas2)
+      const positions = computeFastLayout(
+        graph.nodes,
+        graph.edges,
+        containerWidth,
+        containerHeight,
+        centerNodeId
+      );
+
+      elementsWithPositions = [
+        ...graph.nodes.map(node => ({
+          ...node,
+          position: positions[node.data.id] || { x: containerWidth / 2, y: containerHeight / 2 }
+        })),
+        ...graph.edges
+      ];
+      layoutConfig = { name: "preset" };
+    } else {
+      layoutConfig = createFcoseLayoutConfig(centerNodeId, containerWidth, containerHeight, graph.nodes.length);
+    }
 
     const cy = cytoscape({
       container: containerRef.current,
-      elements: [...graph.nodes, ...graph.edges],
+      elements: elementsWithPositions,
       style: createStyles(colors) as any,
-      layout: createFcoseLayoutConfig(centerNodeId, containerWidth, containerHeight) as any,
+      layout: layoutConfig,
       minZoom: 0.2,
       maxZoom: 3,
       wheelSensitivity: 0.3,
@@ -369,6 +377,90 @@ export default function CoauthorGraphComponent({
     }
   }, [resolvedTheme, colors, isMounted]);
 
+  // Update graph when publication type filters change
+  useEffect(() => {
+    // Skip the first render - initial graph is already set up by initializeCytoscape
+    if (isFirstFilterRender.current) {
+      isFirstFilterRender.current = false;
+      return;
+    }
+
+    if (!cyRef.current || !isMounted || !graph.publications) return;
+
+    const cy = cyRef.current;
+    const centerPid = graph.centerAuthor.pid;
+
+    // Filter publications and rebuild graph data
+    const filteredPubs = filterPublicationsByType(graph.publications, enabledTypes);
+    const { nodes, edges } = rebuildGraphFromPublications(
+      centerPid,
+      graph.centerAuthor,
+      filteredPubs
+    );
+
+    // Get current element IDs
+    const currentNodeIds = new Set(cy.nodes().map((n) => n.id()));
+    const currentEdgeIds = new Set(cy.edges().map((e) => e.id()));
+
+    // Get new element IDs
+    const newNodeIds = new Set(nodes.map((n) => n.data.id));
+    const newEdgeIds = new Set(edges.map((e) => e.data.id));
+
+    cy.batch(() => {
+      // Remove edges that are no longer present
+      cy.edges().forEach((edge) => {
+        if (!newEdgeIds.has(edge.id())) {
+          edge.remove();
+        }
+      });
+
+      // Remove nodes that are no longer present (except center)
+      cy.nodes().forEach((node) => {
+        if (!newNodeIds.has(node.id()) && !node.data("isCenter")) {
+          node.remove();
+        }
+      });
+
+      // Add new nodes
+      for (const node of nodes) {
+        if (!currentNodeIds.has(node.data.id)) {
+          cy.add(node);
+        } else {
+          // Update existing node data
+          cy.getElementById(node.data.id).data(node.data);
+        }
+      }
+
+      // Add new edges
+      for (const edge of edges) {
+        if (!currentEdgeIds.has(edge.data.id)) {
+          cy.add(edge);
+        } else {
+          // Update existing edge data
+          cy.getElementById(edge.data.id).data(edge.data);
+        }
+      }
+    });
+
+    // Run layout to reposition nodes
+    const containerWidth = containerRef.current?.clientWidth || 800;
+    const containerHeight = containerRef.current?.clientHeight || 600;
+    const isLargeGraph = nodes.length > FAST_LAYOUT_THRESHOLD;
+
+    if (isLargeGraph) {
+      const positions = computeFastLayout(nodes, edges, containerWidth, containerHeight, centerPid);
+      cy.nodes().forEach(node => {
+        const pos = positions[node.id()];
+        if (pos) node.position(pos);
+      });
+      cy.fit(undefined, 60);
+    } else {
+      cy.layout(
+        createFcoseLayoutConfig(centerPid, containerWidth, containerHeight, nodes.length) as any
+      ).run();
+    }
+  }, [enabledTypes, graph.publications, graph.centerAuthor, isMounted]);
+
   useEffect(() => {
     const handleResize = () => {
       if (cyRef.current) {
@@ -386,18 +478,48 @@ export default function CoauthorGraphComponent({
       <div
         ref={containerRef}
         className="w-full h-full"
-        style={{ backgroundColor: colors.graphBg }}
+        style={{ backgroundColor: colors.background }}
       />
 
-      {/* Minimal Controls */}
-      <div className="absolute top-4 right-4 flex items-center gap-1">
+      {/* Controls */}
+      <div className="absolute top-4 right-4 flex items-center gap-1.5">
+        {/* Publication Type Filters */}
+        {ALL_PUBLICATION_TYPES.map((type) => {
+          const isEnabled = enabledTypes.has(type);
+          return (
+            <button
+              key={type}
+              onClick={() => onToggleType(type)}
+              className="px-3 h-8 flex items-center justify-center rounded-xl backdrop-blur-md transition-all text-xs font-medium hover:scale-[1.02] active:scale-[0.98]"
+              style={{
+                backgroundColor: isEnabled ? colors.centerNode : colors.panelBg,
+                border: `1px solid ${isEnabled ? "transparent" : colors.panelBorder}`,
+                color: isEnabled ? "#fff" : colors.panelTextMuted,
+                boxShadow: isEnabled ? "0 2px 8px rgba(0,0,0,0.15)" : "none",
+              }}
+              title={`${isEnabled ? "Hide" : "Show"} ${PUBLICATION_TYPE_LABELS[type]} publications`}
+              aria-label={`${isEnabled ? "Hide" : "Show"} ${PUBLICATION_TYPE_LABELS[type]} publications`}
+              aria-pressed={isEnabled}
+            >
+              {PUBLICATION_TYPE_LABELS[type]}
+            </button>
+          );
+        })}
+
+        {/* Separator */}
+        <div
+          className="w-px h-5 mx-1.5"
+          style={{ backgroundColor: colors.panelBorder }}
+        />
+
         <button
           onClick={() => setShowLegend(!showLegend)}
-          className="w-9 h-9 flex items-center justify-center rounded-full backdrop-blur-sm transition-all"
+          className="w-9 h-9 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
           style={{
-            backgroundColor: colors.panelBg,
-            border: `1px solid ${colors.panelBorder}`,
-            color: colors.panelText,
+            backgroundColor: showLegend ? colors.centerNode : colors.panelBg,
+            border: `1px solid ${showLegend ? "transparent" : colors.panelBorder}`,
+            color: showLegend ? "#fff" : colors.panelText,
+            boxShadow: showLegend ? "0 2px 8px rgba(0,0,0,0.15)" : "none",
           }}
           title="Toggle legend"
           aria-label="Toggle legend"
@@ -410,7 +532,7 @@ export default function CoauthorGraphComponent({
         </button>
         <button
           onClick={() => cyRef.current?.fit(undefined, 60)}
-          className="w-9 h-9 flex items-center justify-center rounded-full backdrop-blur-sm transition-all"
+          className="w-9 h-9 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
           style={{
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
@@ -426,13 +548,25 @@ export default function CoauthorGraphComponent({
         <button
           onClick={() => {
             if (!cyRef.current || !containerRef.current) return;
+            const cy = cyRef.current;
             const width = containerRef.current.clientWidth;
             const height = containerRef.current.clientHeight;
             const centerNode = graph.nodes.find(n => n.data.isCenter);
             const centerNodeId = centerNode?.data.id || "";
-            cyRef.current.layout(createFcoseLayoutConfig(centerNodeId, width, height) as any).run();
+            const isLargeGraph = graph.nodes.length > FAST_LAYOUT_THRESHOLD;
+
+            if (isLargeGraph) {
+              const positions = computeFastLayout(graph.nodes, graph.edges, width, height, centerNodeId);
+              cy.nodes().forEach(node => {
+                const pos = positions[node.id()];
+                if (pos) node.position(pos);
+              });
+              cy.fit(undefined, 60);
+            } else {
+              cy.layout(createFcoseLayoutConfig(centerNodeId, width, height, graph.nodes.length) as any).run();
+            }
           }}
-          className="w-9 h-9 flex items-center justify-center rounded-full backdrop-blur-sm transition-all"
+          className="w-9 h-9 flex items-center justify-center rounded-xl backdrop-blur-md transition-all hover:scale-[1.05] active:scale-[0.95]"
           style={{
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
@@ -451,54 +585,60 @@ export default function CoauthorGraphComponent({
       {/* Collapsible Legend */}
       {showLegend && (
         <div
-          className="absolute top-16 right-4 p-4 rounded-xl backdrop-blur-sm text-sm"
+          className="absolute top-16 right-4 p-4 rounded-2xl backdrop-blur-md text-sm animate-fade-in-scale"
           style={{
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
           }}
         >
-          <div className="flex items-center gap-3 mb-2.5">
+          <p className="text-xs font-medium uppercase tracking-wider mb-3" style={{ color: colors.panelTextMuted }}>
+            Legend
+          </p>
+          <div className="flex items-center gap-3 mb-3">
             <div
-              className="w-4 h-4 rounded-full"
+              className="w-5 h-5 rounded-full flex-shrink-0"
               style={{ backgroundColor: colors.centerNode }}
             />
             <span style={{ color: colors.panelText }}>Center author</span>
           </div>
-          <div className="flex items-center gap-3 mb-2.5">
+          <div className="flex items-center gap-3 mb-3">
             <div
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: colors.nodeColor }}
+              className="w-4 h-4 rounded-full flex-shrink-0 ml-0.5"
+              style={{ backgroundColor: colors.node }}
             />
             <span style={{ color: colors.panelText }}>Coauthor</span>
           </div>
-          <div className="flex items-center gap-3 mb-2.5">
+          <div className="flex items-center gap-3 mb-3">
             <div
-              className="w-5 h-0.5"
-              style={{ backgroundColor: colors.edgeColor }}
+              className="w-5 h-0.5 ml-0.5 flex-shrink-0 rounded-full"
+              style={{ backgroundColor: colors.edge }}
             />
             <span style={{ color: colors.panelText }}>Collaboration</span>
           </div>
           <div
-            className="text-xs mt-3 pt-3"
+            className="text-xs mt-4 pt-3 leading-relaxed"
             style={{
               color: colors.panelTextMuted,
               borderTop: `1px solid ${colors.panelBorder}`,
             }}
           >
-            Size = papers · Width = shared
+            Node size = paper count<br />
+            Edge width = shared papers
           </div>
         </div>
       )}
 
-      {/* Minimal Tooltip */}
+      {/* Tooltip */}
       {hoveredElement && (
         <div
-          className="fixed pointer-events-none z-50 px-3 py-2 rounded-lg backdrop-blur-sm"
+          className="fixed pointer-events-none z-50 px-3.5 py-2.5 rounded-xl backdrop-blur-md"
           style={{
             left: Math.min(hoveredElement.x + 12, window.innerWidth - 180),
-            top: hoveredElement.y - 40,
+            top: hoveredElement.y - 44,
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
           }}
         >
           <p
@@ -508,7 +648,7 @@ export default function CoauthorGraphComponent({
             {hoveredElement.label}
           </p>
           <p
-            className="text-xs"
+            className="text-xs mt-0.5"
             style={{ color: colors.panelTextMuted }}
           >
             {hoveredElement.paperCount} paper{hoveredElement.paperCount !== 1 ? "s" : ""}
@@ -519,26 +659,27 @@ export default function CoauthorGraphComponent({
       {/* Papers Panel - Bottom Right */}
       {selectedEdge && (
         <div
-          className="absolute bottom-4 right-4 w-80 max-h-[60vh] rounded-xl backdrop-blur-sm overflow-hidden flex flex-col"
+          className="absolute bottom-4 right-4 w-80 max-h-[60vh] rounded-2xl backdrop-blur-md overflow-hidden flex flex-col animate-fade-in-scale"
           style={{
             backgroundColor: colors.panelBg,
             border: `1px solid ${colors.panelBorder}`,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
           }}
         >
           {/* Header */}
           <div
-            className="flex items-center justify-between p-3 shrink-0"
+            className="flex items-center justify-between px-4 py-3.5 shrink-0"
             style={{ borderBottom: `1px solid ${colors.panelBorder}` }}
           >
             <div className="min-w-0 flex-1">
               <p
-                className="font-medium text-sm truncate"
+                className="font-semibold text-sm truncate"
                 style={{ color: colors.panelText }}
               >
                 {selectedEdge.sourceLabel} & {selectedEdge.targetLabel}
               </p>
               <p
-                className="text-xs"
+                className="text-xs mt-0.5"
                 style={{ color: colors.panelTextMuted }}
               >
                 {selectedEdge.papers.length} shared paper{selectedEdge.papers.length !== 1 ? "s" : ""}
@@ -546,11 +687,11 @@ export default function CoauthorGraphComponent({
             </div>
             <button
               onClick={() => setSelectedEdge(null)}
-              className="ml-2 p-1 rounded-md hover:bg-black/10 dark:hover:bg-white/10 transition-colors shrink-0"
+              className="ml-2 p-1.5 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors shrink-0"
               style={{ color: colors.panelTextMuted }}
               aria-label="Close papers panel"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             </button>
@@ -566,16 +707,16 @@ export default function CoauthorGraphComponent({
                   href={paper.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block p-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                  className="block p-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors group"
                 >
                   <p
-                    className="text-sm leading-snug"
+                    className="text-sm leading-snug group-hover:text-amber-600 dark:group-hover:text-amber-500 transition-colors"
                     style={{ color: colors.panelText }}
                   >
                     {paper.title}
                   </p>
                   <p
-                    className="text-xs mt-1"
+                    className="text-xs mt-1.5"
                     style={{ color: colors.panelTextMuted }}
                   >
                     {[paper.year, paper.venue].filter(Boolean).join(" · ")}

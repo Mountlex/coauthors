@@ -7,54 +7,96 @@ body {
 
 /* Light mode (default) */
 :root {
-  --bg-primary: #f8fafc;
+  --bg-primary: #fafafa;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f5f9;
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  --border-color: #e2e8f0;
-  --accent-blue: #3b82f6;
-  --accent-blue-dark: #2563eb;
-  --accent-orange: #f97316;
-  --accent-orange-dark: #ea580c;
-  --graph-bg: #f1f5f9;
-  --node-color: #3b82f6;
-  --node-border: #2563eb;
-  --node-text: #ffffff;
-  --center-node: #f97316;
-  --center-border: #ea580c;
-  --edge-color: #60a5fa;
-  --edge-coauthor: #94a3b8;
-  --highlight-color: #60a5fa;
+  --bg-tertiary: #f5f5f5;
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-muted: #a3a3a3;
+  --border-color: #e5e5e5;
+  --accent-amber: #d97706;
+  --accent-amber-light: #f59e0b;
+  --graph-bg: #fafafa;
+
+  /* Gradient backgrounds */
+  --gradient-start: #fafafa;
+  --gradient-end: #f5f5f5;
+  --gradient-accent: rgba(217, 119, 6, 0.03);
 }
 
 /* Dark mode */
 .dark {
-  --bg-primary: #000000;
-  --bg-secondary: #0f172a;
-  --bg-tertiary: #1e293b;
-  --text-primary: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-muted: #64748b;
-  --border-color: #334155;
-  --accent-blue: #3b82f6;
-  --accent-blue-dark: #2563eb;
-  --accent-orange: #f97316;
-  --accent-orange-dark: #ea580c;
-  --graph-bg: #000000;
-  --node-color: #3b82f6;
-  --node-border: #1d4ed8;
-  --node-text: #ffffff;
-  --center-node: #f97316;
-  --center-border: #c2410c;
-  --edge-color: #60a5fa;
-  --edge-coauthor: #475569;
-  --highlight-color: #93c5fd;
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #171717;
+  --bg-tertiary: #262626;
+  --text-primary: #fafafa;
+  --text-secondary: #d4d4d4;
+  --text-muted: #737373;
+  --border-color: #404040;
+  --accent-amber: #f59e0b;
+  --accent-amber-light: #fbbf24;
+  --graph-bg: #0a0a0a;
+
+  /* Gradient backgrounds */
+  --gradient-start: #0a0a0a;
+  --gradient-end: #171717;
+  --gradient-accent: rgba(245, 158, 11, 0.02);
 }
 
 body {
-  background-color: var(--bg-primary);
+  background: linear-gradient(180deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+  background-attachment: fixed;
   color: var(--text-primary);
-  transition: background-color 0.2s, color 0.2s;
+  transition: background 0.3s ease-out, color 0.3s ease-out;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Focus visible styles for accessibility */
+*:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: 2px;
+}
+
+/* Smooth transitions for interactive elements */
+button, a, input {
+  transition: all 0.15s ease-out;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Animation keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.animate-fade-in-scale {
+  animation: fadeInScale 0.2s ease-out forwards;
 }

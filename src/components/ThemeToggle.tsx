@@ -5,16 +5,18 @@ import { useTheme } from "./ThemeProvider";
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
 
+  const buttonBase = "p-2.5 rounded-lg transition-all duration-150";
+  const buttonActive = "bg-white dark:bg-neutral-800 text-amber-600 dark:text-amber-500 shadow-sm";
+  const buttonInactive = "text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-200/50 dark:hover:bg-neutral-700/50";
+
   return (
-    <div className="flex items-center gap-1 bg-gray-200 dark:bg-gray-800 rounded-lg p-1">
+    <div className="flex items-center gap-0.5 bg-neutral-100 dark:bg-neutral-900 rounded-xl p-1 border border-neutral-200/50 dark:border-neutral-800">
       <button
         onClick={() => setTheme("light")}
-        className={`p-2 rounded-md transition-colors ${
-          theme === "light"
-            ? "bg-white dark:bg-gray-700 text-orange-500 shadow-sm"
-            : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
-        }`}
+        className={`${buttonBase} ${theme === "light" ? buttonActive : buttonInactive}`}
         title="Light mode"
+        aria-label="Light mode"
+        aria-pressed={theme === "light"}
       >
         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
           <path
@@ -26,12 +28,10 @@ export function ThemeToggle() {
       </button>
       <button
         onClick={() => setTheme("dark")}
-        className={`p-2 rounded-md transition-colors ${
-          theme === "dark"
-            ? "bg-white dark:bg-gray-700 text-blue-500 shadow-sm"
-            : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
-        }`}
+        className={`${buttonBase} ${theme === "dark" ? buttonActive : buttonInactive}`}
         title="Dark mode"
+        aria-label="Dark mode"
+        aria-pressed={theme === "dark"}
       >
         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
           <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
@@ -39,12 +39,10 @@ export function ThemeToggle() {
       </button>
       <button
         onClick={() => setTheme("system")}
-        className={`p-2 rounded-md transition-colors ${
-          theme === "system"
-            ? "bg-white dark:bg-gray-700 text-blue-500 shadow-sm"
-            : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
-        }`}
+        className={`${buttonBase} ${theme === "system" ? buttonActive : buttonInactive}`}
         title="System preference"
+        aria-label="System preference"
+        aria-pressed={theme === "system"}
       >
         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
           <path
