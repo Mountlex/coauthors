@@ -212,8 +212,8 @@ export default function CoauthorGraphComponent({
     if (cyRef.current) {
       try {
         cyRef.current.destroy();
-      } catch {
-        // Ignore destroy errors
+      } catch (error) {
+        console.warn("Cytoscape cleanup error:", error);
       }
       cyRef.current = null;
     }
@@ -354,8 +354,8 @@ export default function CoauthorGraphComponent({
       if (cyRef.current) {
         try {
           cyRef.current.destroy();
-        } catch {
-          // Ignore destroy errors
+        } catch (error) {
+          console.warn("Cytoscape cleanup error:", error);
         }
         cyRef.current = null;
       }

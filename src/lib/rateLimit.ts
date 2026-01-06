@@ -5,8 +5,36 @@ type RateLimitEntry = {
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
-// IPv4 and IPv6 pattern for validation
-const IP_PATTERN = /^(?:(?:\d{1,3}\.){3}\d{1,3}|[a-fA-F0-9:]+)$/;
+/**
+ * Validate IPv4 address (each octet must be 0-255)
+ */
+function isValidIPv4(ip: string): boolean {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    const num = parseInt(part, 10);
+    return !isNaN(num) && num >= 0 && num <= 255 && part === num.toString();
+  });
+}
+
+/**
+ * Validate IPv6 address (basic validation)
+ */
+function isValidIPv6(ip: string): boolean {
+  if (!ip.includes(":")) return false;
+  const groups = ip.split(":");
+  // IPv6 has 8 groups, but :: compression can reduce this
+  if (groups.length < 3 || groups.length > 8) return false;
+  // Each group must be empty (for ::) or 1-4 hex chars
+  return groups.every((g) => g === "" || /^[a-fA-F0-9]{1,4}$/.test(g));
+}
+
+/**
+ * Validate IP address format
+ */
+function isValidIP(ip: string): boolean {
+  return isValidIPv4(ip) || isValidIPv6(ip);
+}
 
 // Clean up expired entries periodically
 const CLEANUP_INTERVAL = 60 * 1000; // 1 minute
@@ -93,13 +121,13 @@ export function getClientIP(request: Request): string {
     // Take the first IP in the chain (original client)
     const firstIP = forwardedFor.split(",")[0].trim();
     // Validate IP format to prevent header spoofing
-    if (IP_PATTERN.test(firstIP)) {
+    if (isValidIP(firstIP)) {
       return firstIP;
     }
   }
 
   const realIP = request.headers.get("x-real-ip");
-  if (realIP && IP_PATTERN.test(realIP)) {
+  if (realIP && isValidIP(realIP)) {
     return realIP;
   }
 

@@ -14,20 +14,19 @@ const MAX_CACHE_SIZE = 500;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const cache = new Map<string, { data: unknown; timestamp: number; accessedAt: number }>();
 
-// Simple lock for cache operations to prevent race conditions
-let cacheOperationInProgress = false;
+// Promise-based mutex for cache operations (no busy-wait)
+let cachePromise: Promise<void> = Promise.resolve();
 
 async function withCacheLock<T>(operation: () => T): Promise<T> {
-  // Wait if another operation is in progress
-  while (cacheOperationInProgress) {
-    await new Promise(resolve => setTimeout(resolve, 1));
-  }
-  cacheOperationInProgress = true;
-  try {
-    return operation();
-  } finally {
-    cacheOperationInProgress = false;
-  }
+  // Chain operations sequentially to ensure FIFO ordering
+  let result: T;
+  const currentPromise = cachePromise.then(() => {
+    result = operation();
+  });
+  // Update chain, ignoring errors to not block subsequent operations
+  cachePromise = currentPromise.catch(() => {});
+  await currentPromise;
+  return result!;
 }
 
 function evictLRU(): void {
@@ -341,8 +340,10 @@ function slugify(name: string): string {
 
 /**
  * Remove DBLP disambiguation numbers from author names
+ * DBLP uses zero-padded 4-digit numbers starting with 0 (0001-0999)
  * e.g., "John Smith 0001" -> "John Smith"
+ * Does NOT match years like "Bach 2024" which could be legitimate
  */
 function cleanAuthorName(name: string): string {
-  return name.replace(/\s+\d{4}$/, "").trim();
+  return name.replace(/\s+0\d{3}$/, "").trim();
 }
